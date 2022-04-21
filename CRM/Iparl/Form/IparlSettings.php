@@ -79,9 +79,8 @@ class CRM_Iparl_Form_IparlSettings extends CRM_Core_Form {
     $this->saveSettings();
     parent::postProcess();
     // Reload cache.
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
     foreach (['action', 'petition'] as $type) {
-      $webhook->getIparlObject($type, TRUE);
+      \Civi\Iparl\WebhookProcessor::getIparlObject($type, TRUE);
     }
 
     CRM_Core_Session::setStatus(ts('iParl settings updated.'));

@@ -119,7 +119,120 @@ Technically, you will need to do one of the following (after taking a backup):
    `iparl-webhooks-failed` record again.)
 
 
-## Developers
+## Developers wanting to contribute to the project
+
+Hi! Thanks! Let’s make this better. If you add features (or fix bugs) please (a) run existing tests, (b) add new/update tests. The tests run with phpunit8 (and phpunit7, currently). You'll need a buildkit environment to run the tests; you can’t run tests on a normal site.
+
+## Developers needing to customise the processing
+
+You can interfere with the webhook processing at the queuing stage and the processing stage, by listening for some Symfony events in your custom extension.
+
+If you’re new to this, I think I have provided a reasonable explanation of how to work with Symfony events in my [Stack Exchange answer](https://civicrm.stackexchange.com/a/39948/35) and there’s example code here, too. The code below assumes your extension is called `myext` and sets up listeners for each event with simple functions, examples of which are included in the following two sections.
+
+In your main extension file, `myext.php`:
+
+```php
+<?php
+/**
+ * Implements hook_civicrm_container().
+ *
+ * @link https://docs.civicrm.org/dev/en/latest/hooks/hook_civicrm_container/
+ */
+function myext_civicrm_container($container) {
+  // https://docs.civicrm.org/dev/en/latest/hooks/usage/symfony/
+  $container->findDefinition('dispatcher')
+
+  // To alter the initial receive-and-queue process:
+  ->addMethodCall('addListener', [
+    'civi.iparl.receive',
+    'myext_iparl_receive_alter']
+  )
+  // To alter the processing of queued items:
+  ->addMethodCall('addListener', [
+    'civi.iparl.process',
+    'myext_iparl_process_alter']
+  );
+}
+```
+
+### Webhook received event
+
+This event (`civi.iparl.receive` or `\Civi\Iparl\WebhookProcessor::RECEIVE_EVENT`) has the following properties:
+
+- `$event->raw` the raw data array
+- `$event->chain` array of callables that will be used to process the data before it is queued.
+
+The `chain` is an ordered associative array. The keys that this extension provides are: `checkRequiredFields` (rejects if email or webhook secret is missing), `checkSecret` (rejects if secret does not match configured value), `firewallNames` (strips some emoji and rejects if URLs found in name fields). These keys are provided so that you could easily remove or replace that part of the processing. You can add tasks to the end, too, and it would be feasible to add tasks in the middle somewhere if you really needed to.
+
+Let's say you wanted to remove the firewallNames filter because you think people should be able to change their name to a URL these days (?!), and let's say you want to add another filter that rejects any emails from knownspammer.net domain.
+
+In your extension:
+```php
+<?php
+
+function myext_iparl_receive_alter(\Civi\Core\Event\GenericHookEvent $event) {
+    // do without the firewall bit.
+    unset($event->chain['firewallNames']);
+    // Add our own function to remove known spammer
+    $event->chain[] = 'myext_iparl_reject_spam_domain';
+}
+
+function myext_iparl_reject_spam_domain(array &$data) {
+  $email = $data['email'] ?? '';
+  if (preg_match('/@knownspammer.net$/', $email)) {
+    // Don't queue this one:
+    throw new InvalidArgumentException("Rejecting knownspammer email: '$email'");
+  }
+
+  // Nb. we can, should we wish, add/alter extra data here too,
+  // e.g. if you later implemented something in the process event below.
+  // $data['hello'] = 'world';
+}
+```
+
+### Webhook process event
+
+This event (`civi.iparl.process` or `\Civi\Iparl\WebhookProcessor::PROCESS_EVENT`) has only the `chain` property, which as with the receive event above, is an array of callables that will be used to process the queued data.
+
+The chain comes with the following:
+
+- `parseNames` Ensures the data has `first_name` and `last_name` by splitting if needed.
+- `findOrCreate` Ensures the data has `contactID` (used by all following processes).
+- `mergePhone` Ensures the phone number is applied to the contact record.
+- `mergeAddress` Ensures the address is applied to the contact record.
+- `recordActivity` Records the iParl activity
+- `legacyHook` For backwards compatibility, this implements the original post-process data hook (see below)
+
+For our example, let's say you want to use [xcm](https://github.com/systopia/de.systopia.xcm/) to process the contact data instead of the `findOrCreate`, `mergePhone` and `mergeAddress` methods provided by this extension. And let's say you want to add signers to a group, too.
+
+```php
+<?php
+function myext_iparl_process_alter(\Civi\Core\Event\GenericHookEvent $event) {
+  // Replace the default findOrCreate method with our own that also handles phones, addresses.
+  $event->chain['findOrCreate'] = 'myext_custom_find_or_create';
+  unset($event->chain['mergePhone']);
+  unset($event->chain['mergeAddress']);
+  // add our add to group function, too
+  $event->chain['addToGroup'] = 'myext_custom_add_to_group';
+}
+
+function myext_custom_find_or_create(&$data) {
+  $contactID = civicrm_api3('Contact', 'getorcreate', $data);
+  // Remember to set the contactID key, it's required by other processes:
+  $data['contactID'] = $contactID;
+
+  // Note: if we throw an exception here, the process will not proceed and the queued webhook will be re-queued as a failed webhook event which will need manual intervention.
+}
+
+function myext_custom_add_to_group(&$data) {
+    $contactIDs = [$data['contactID']];
+    CRM_Contact_BAO_GroupContact::addContactsToGroup(
+      $contactIDs,
+      OUR_NEWSLETTER_GROUP_ID);
+}
+```
+
+### Deprecated hook (works in 1.3 - 1.6)
 
 There's now (since 1.3) a hook you can use to do your own processing of the
 incoming webhook data (e.g. check/record consent and add to groups).
@@ -152,6 +265,17 @@ has been funded by the Equality Trust and We Own It.
 Futher pull requests welcome :-)
 
 ## Changelog
+
+### Version 1.6.0 (potentially breaking changes)
+
+This version involved a big refactor of the code. This should not affect functionality, and should slightly improve efficiency, but the primary reason was to enable better local customisations.
+
+Changes:
+
+- improved caching of petition data.
+- deprecated `hook_civicrm_iparl_webhook_post_process`
+- new Symfony events allow customisation pre-accepting data from iParl, and to allow full customisation of how the queued data is processed.
+- includes filters that remove emojis from names, and reject any webhook that has URLs in the name fields - this is a known spam attack vector, as many set-ups have a thank you email that outputs the name in the thank you email, thereby enabling a spammer to inject their link in your email.
 
 ### Version 1.5.0
 

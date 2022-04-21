@@ -1,6 +1,8 @@
 <?php
 use CRM_Iparl_ExtensionUtil as E;
 
+use Civi\Iparl\WebhookProcessor;
+
 /**
  * Job.Processiparlwebhookqueue API specification (optional)
  * This is used for documentation and validation.
@@ -27,9 +29,8 @@ function civicrm_api3_job_Processiparlwebhookqueue($params) {
   // Ensure we have the latest definitions If we don't have the definitions
   // there's no point running - it would create lots of iparl-webhooks-failed
   // entries that are more of a pain to sort out.
-  $webhook = new CRM_Iparl_Page_IparlWebhook();
   foreach (['action', 'petition'] as $type) {
-    if ($webhook->getIparlObject($type, TRUE) === NULL) {
+    if (WebhookProcessor::getIparlObject($type, TRUE) === NULL) {
       return ['processed' => 0, 'is_error' => 1, 'error_message' => "Failed to load iParl resource: $type"];
     }
   }

@@ -4,6 +4,7 @@ use CRM_Iparl_ExtensionUtil as E;
 use Civi\Test\HeadlessInterface;
 use Civi\Test\HookInterface;
 use Civi\Test\TransactionalInterface;
+use Civi\Iparl\WebhookProcessor;
 
 require_once __DIR__ . '/shared.php';
 
@@ -38,6 +39,24 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
     return $r;
   }
 
+  public function setUp() :void {
+    // Remove all cached values.
+    unset(\Civi::$statics['iparl_titles_action']);
+    unset(\Civi::$statics['iparl_titles_petition']);
+    $cache = \CRM_Utils_Cache::create([
+      'type' => ['SqlGroup', 'ArrayCache'],
+      'name' => 'iparl',
+    ]);
+    $cache->deleteMultiple(['iparl_titles_action', 'iparl_titles_petition']);
+
+    WebhookProcessor::$iparl_logging = 'phpunit';
+  }
+  public function tearDown() :void {
+    CRM_Core_DAO::executeQuery("DELETE FROM civicrm_cache WHERE group_name = 'iparl';");
+    CRM_Core_DAO::executeQuery("DELETE FROM civicrm_setting WHERE name LIKE 'iparl_%';");
+    unset(\Civi::$statics['iparl_titles_petition']);
+    unset(\Civi::$statics['iparl_titles_action']);
+  }
   /**
    * This is a rather long test.
    *
@@ -60,16 +79,14 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
   public function testAction() {
     global $iparl_hook_test;
 
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
-    $webhook->iparl_logging = 'phpunit';
+    WebhookProcessor::$iparl_logging = 'phpunit';
 
     // Mock the iParl XML API.
     $calls = 0;
     $this->mockIparlTitleLookup($calls);
     $this->setMockIParlSetting();
 
-
-    $result = $webhook->processWebhook([
+    $result = WebhookProcessor::processQueuedWebhook([
       'actionid' => 123,
       'secret'   => 'helloHorseHeadLikeYourJumper',
       'name'     => 'Wilma',
@@ -85,7 +102,7 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
       'optin2'   => 1,
       'date'     => '2021-02-03 12:34:56',
     ]);
-    $this->assertTrue($result, "Expected success from processWebhook. Here's the log:\n" . implode("\n",$webhook->test_log));
+    $this->assertTrue($result, "Expected success from processWebhook. Here's the log:\n" . implode("\n",WebhookProcessor::$test_log));
 
     // There should now be a contact for Wilma
     $result = civicrm_api3('Contact', 'get', ['email' => 'wilma@example.com', 'first_name' => 'Wilma', 'last_name' => 'Flintstone']);
@@ -100,8 +117,10 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
       "Created address",
       "Cache miss on looking up iparl_titles_action",
       "Caching 2 results from https://iparlsetup.com/api/superfoo/actions.xml for 1 hour.",
+      "/Created iParl action activity \d+: Action 123: Some demo action/",
+      "/Processed \(deprecated\) hook_civicrm_iparl_webhook_post_process .*/",
       "/^Successfully created\/updated contact $contact_id in \d+(\.\d+)?s$/",
-    ], $webhook->test_log, "Failed testing that a new contact was created.");
+    ], WebhookProcessor::$test_log, "Failed testing that a new contact was created.");
 
     // There should be a phone.
     $result = civicrm_api3('Phone', 'get', ['sequential' => 1, 'contact_id' => $contact_id]);
@@ -130,13 +149,13 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
 
 
     // Check that the hook was fired.
-    $this->assertInternalType('array', $iparl_hook_test);
+    $this->assertIsArray($iparl_hook_test);
     $this->assertArrayHasKey('contact', $iparl_hook_test);
 
     // Repeat. There should now be two activities but only one contact
     // We set the username though to obtain more info for the activity.
-    $webhook->test_log = [];
-    $result = $webhook->processWebhook([
+    WebhookProcessor::$test_log = [];
+    $result = WebhookProcessor::processQueuedWebhook([
       'actionid' => 123,
       'secret'   => 'helloHorseHeadLikeYourJumper',
       'name'     => 'Wilma',
@@ -164,10 +183,11 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
       "Found contact $contact_id by email match.",
       "Phone already present",
       "Address already existed.",
-      "Cache hit on looking up iparl_titles_action",
+      "Cache hit (static) on iparl_titles_action",
+      "/Created iParl action activity \d+: Action 123: Some demo action/",
+      "/Processed \(deprecated\) hook_civicrm_iparl_webhook_post_process .*/",
       "/^Successfully created\/updated contact $contact_id in \d+(\.\d+)?s$/",
-      "/^Processed hook_civicrm_iparl_webhook_post_process in \d+(\.\d+)?s$/",
-    ], $webhook->test_log, "Failed testing that a 2nd action resulted in the existing contact being updated.");
+    ], WebhookProcessor::$test_log, "Failed testing that a 2nd action resulted in the existing contact being updated.");
 
     // There should be one phone.
     $result = civicrm_api3('Phone', 'get', ['sequential' => 1, 'contact_id' => $contact_id]);
@@ -187,12 +207,12 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
     $this->assertEquals('Action 123: Some demo action', $result['values'][1]['subject']);
 
     $this->assertEquals(1, $calls);
-    $lookup = $webhook->getIparlObject('action');
-    $this->assertInternalType('array', $lookup);
+    $lookup = WebhookProcessor::getIparlObject('action');
+    $this->assertIsArray($lookup);
     $this->assertEquals(1, $calls, 'Multiple calls to fetch iParl api resource suggests caching fail.');
 
-    $lookup = $webhook->getIparlObject('petition');
-    $this->assertInternalType('array', $lookup);
+    $lookup = WebhookProcessor::getIparlObject('petition');
+    $this->assertIsArray($lookup);
     $this->assertEquals(2, $calls);
   }
 
@@ -201,15 +221,13 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
    */
   public function testNamesSeparateFirstAndLast() {
 
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
-    $webhook->iparl_logging = 'phpunit';
-
-    $webhook->parseNames([
+    $data = [
       'name' => 'Wilma',
       'surname' => 'Flintstone',
-    ]);
-    $this->assertEquals('Wilma', $webhook->first_name);
-    $this->assertEquals('Flintstone', $webhook->last_name);
+    ];
+    WebhookProcessor::parseNames($data);
+    $this->assertEquals('Wilma', $data['first_name']);
+    $this->assertEquals('Flintstone', $data['last_name']);
   }
 
   /**
@@ -217,43 +235,29 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
    */
   public function testNamesCombinedFirstAndLast() {
 
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
-    $webhook->iparl_logging = 'phpunit';
-
-    $webhook->parseNames([
-      'name' => 'Wilma Flintstone',
-    ]);
-    $this->assertEquals('Wilma', $webhook->first_name);
-    $this->assertEquals('Flintstone', $webhook->last_name);
+    $data = ['name' => 'Wilma Flintstone'];
+    WebhookProcessor::parseNames($data);
+    $this->assertEquals('Wilma', $data['first_name']);
+    $this->assertEquals('Flintstone', $data['last_name']);
   }
 
   /**
    * Check name splitting works.
    */
   public function testNamesCombinedOneWord() {
-
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
-    $webhook->iparl_logging = 'phpunit';
-
-    $webhook->parseNames([
-      'name' => 'Wilma',
-    ]);
-    $this->assertEquals('Wilma', $webhook->first_name);
-    $this->assertEquals('', $webhook->last_name);
+    $data = [ 'name' => 'Wilma' ];
+    WebhookProcessor::parseNames($data);
+    $this->assertEquals('Wilma', $data['first_name']);
+    $this->assertEquals('', $data['last_name']);
   }
 
   /**
    * Check name splitting works.
-   *
-   * @expectedException Exception
-   * @expectedExceptionMessage iParl webhook requires data in the 'name' field.
    */
   public function testNamesNone() {
-
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
-    $webhook->iparl_logging = 'phpunit';
-
-    $webhook->parseNames([]);
+    $this->expectExceptionMessage("iParl webhook requires data in the 'name' field.");
+    $data = [];
+    WebhookProcessor::parseNames($data);
   }
 
   /**
@@ -261,10 +265,8 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
    */
   public function testChecksWork() {
 
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
     $calls = 0;
     $this->mockIparlTitleLookup($calls, TRUE);
-    $webhook->iparl_logging = 'phpunit';
 
     // Abandoned the following approach in favour of narrowing the test to our own code.
     // $result = civicrm_api3('System', 'check');
@@ -322,10 +324,10 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
     foreach ($messages as $message) {
       if ($message->getName() === 'iparl_webhook_fail') {
         $notFound = FALSE;
-        $this->assertEquals("<p>The iParl extension found 1 un-processable webhook submissions. This can be the case if someone puts spam data into the iParl forms and it passes it along to us. These submissions have not been (fully) processed and you will find details in the iParl log file.</p>",
+        $this->assertRegExp('@<p>The iParl extension found un-processable webhook submissions, 1 total, 1 within the last 2 weeks, latest one at [0-9-]{10} [0-9:]{8}@',
           $message->getMessage()
         );
-        $this->assertEquals('iParl Webhook errors found', $message->getTitle());
+        $this->assertRegExp('@iParl Webhook errors found \(1 total, 1 recent, latest at [0-9-]{10} [0-9:]{8}\)@', $message->getTitle());
         break;
       }
     }

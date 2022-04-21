@@ -1,6 +1,7 @@
 <?php
 
 use CRM_Iparl_ExtensionUtil as E;
+use Civi\Iparl\WebhookProcessor;
 
 require_once 'iparl.civix.php';
 
@@ -217,21 +218,19 @@ function iparl_civicrm_check(&$messages) {
   }
   else {
     // Ok we have username, see if we can load the data.
-    $webhook = new CRM_Iparl_Page_IparlWebhook();
-
     $is_error = FALSE;
     $api_fails = [];
 
     foreach (['action', 'petition'] as $type) {
-      $result = $webhook->getIparlObject($type, TRUE);
+      $result = WebhookProcessor::getIparlObject($type, TRUE);
       if (empty($result)) {
         if ($result === NULL) {
           // Actual failure.
           $is_error = TRUE;
-          $api_fails[] = "Error: Failed to load $type titles from " . htmlspecialchars($webhook->getLookupUrl($type));
+          $api_fails[] = "Error: Failed to load $type titles from " . htmlspecialchars(WebhookProcessor::getLookupUrl($type));
         }
         else {
-          $api_fails[] = "Note: Lookup found no $type titles from " . htmlspecialchars($webhook->getLookupUrl($type)) . " (this is fine if you haven't made any {$type}s on iParl.)";
+          $api_fails[] = "Note: Lookup found no $type titles from " . htmlspecialchars(WebhookProcessor::getLookupUrl($type)) . " (this is fine if you haven't made any {$type}s on iParl.)";
         }
       }
     }
