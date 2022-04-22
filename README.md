@@ -276,6 +276,10 @@ Changes:
 - deprecated `hook_civicrm_iparl_webhook_post_process`
 - new Symfony events allow customisation pre-accepting data from iParl, and to allow full customisation of how the queued data is processed.
 - includes filters that remove emojis from names, and reject any webhook that has URLs in the name fields - this is a known spam attack vector, as many set-ups have a thank you email that outputs the name in the thank you email, thereby enabling a spammer to inject their link in your email.
+- If calling the iParl API to get titles of actions (e.g. `https://iparlsetup.com/api/<your_user_id>/actions.xml`) fails (and experience says this can happen not infrequently), or if it's empty (e.g. an admin mistakenly marked a petition not-public which removes it from these API results) then the queued webhook will fail and the queue will be aborted. Previously we did this check before failing the first one, however for orgs that don't use one of the action types (petition, action) this could have caused problems.
+
+
+
 
 ### Version 1.5.0
 
