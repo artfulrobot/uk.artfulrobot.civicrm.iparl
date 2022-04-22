@@ -429,7 +429,6 @@ class WebhookProcessor {
           $function = static::$simplexml_load_file;
           $xml = $function($url , null , LIBXML_NOCDATA);
           $file = json_decode(json_encode($xml), TRUE);
-          static::iparlLog("Received for $cache_key from $url: " . json_encode($xml));
           if (is_array($file)) {
             // Successfully downloaded data.
             $data = [];

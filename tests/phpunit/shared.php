@@ -69,31 +69,40 @@ trait IparlShared {
    * Regex patterns are identified by / at start
    */
   public function assertArrayRegex($expected, $actual) {
-    $errors = [];
+    $diff = [];
+    $errors = 0;
     $this->assertIsArray($actual);
     foreach ($expected as $i => $pattern) {
       if (!isset($actual[$i])) {
-        $errors[] = "- $i => $pattern\n";
-        $errors[] = "+ $i => (MISSING)\n";
+        $diff[] = "- $i => $pattern\n";
+        $diff[] = "+ $i => (MISSING)\n";
       }
       elseif (substr($pattern, 0, 1) === '/') {
         // regex match.
         if (!preg_match($pattern, $actual[$i])) {
-          $errors[] = "- $i => $pattern\n";
-          $errors[] = "+ $i => {$actual[$i]}\n";
+          $diff[] = "- $i => $pattern\n";
+          $diff[] = "+ $i => {$actual[$i]}\n";
+          $errors++;
+        }
+        else {
+          $diff[] = "✔ $i => {$actual[$i]}\n";
         }
       }
       else {
         // String match.
         if ($pattern !== $actual[$i]) {
-          $errors[] = "- $i => $pattern\n";
-          $errors[] = "+ $i => {$actual[$i]}\n";
+          $diff[] = "- $i => $pattern\n";
+          $diff[] = "+ $i => {$actual[$i]}\n";
+          $errors++;
+        }
+        else {
+          $diff[] = "✔ $i => {$actual[$i]}\n";
         }
       }
     }
-    $errors = implode('', $errors);
+    $diff = implode('', $diff);
     if ($errors) {
-      $this->fail("Not matching expectations:\n" . $errors . "\n\nFull log\n" . implode("\n", $actual));
+      $this->fail("$errors lines not matching expectations:\n" . $diff);
     }
   }
 

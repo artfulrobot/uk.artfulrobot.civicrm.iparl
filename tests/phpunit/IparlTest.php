@@ -112,11 +112,12 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
 
     $this->assertArrayRegex([
       "/^Processing queued webhook: .*/",
+      'Cache miss on looking up iparl_titles_action, must fetch',
+      'Caching 2 results from https://iparlsetup.com/api/superfoo/actions.xml for 1 hour.',
       "Created contact $contact_id because email was not found.",
       "Created phone",
       "Created address",
-      "Cache miss on looking up iparl_titles_action",
-      "Caching 2 results from https://iparlsetup.com/api/superfoo/actions.xml for 1 hour.",
+      "Cache hit (static) on iparl_titles_action",
       "/Created iParl action activity \d+: Action 123: Some demo action/",
       "/Processed \(deprecated\) hook_civicrm_iparl_webhook_post_process .*/",
       "/^Successfully created\/updated contact $contact_id in \d+(\.\d+)?s$/",
@@ -180,6 +181,7 @@ class IparlTest extends \PHPUnit\Framework\TestCase implements HeadlessInterface
 
     $this->assertArrayRegex([
       "/^Processing queued webhook: .*/",
+      "Cache hit (static) on iparl_titles_action",
       "Found contact $contact_id by email match.",
       "Phone already present",
       "Address already existed.",
