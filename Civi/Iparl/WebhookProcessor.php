@@ -36,7 +36,7 @@ class WebhookProcessor {
         'reset' => FALSE, // We do NOT want to delete an existing queue!
       ]);
       $queue->createItem(new \CRM_Queue_Task(
-        ['CRM_Iparl_Page_IparlWebhook', 'processQueueItem'], // callback
+        ['Civi\\Iparl\\WebhookProcessor', 'processQueueItem'], // callback
         [$data], // arguments
         "" // title
       ));
