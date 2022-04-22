@@ -11,8 +11,8 @@ class WebhookProcessor {
   /** @var array */
   public static $test_log = [];
 
-  /** @var bool */
-  public static $iparl_logging = FALSE;
+  /** @var ?bool Cached copy of the setting 'iparl_logging' */
+  public static $iparl_logging;
 
   /** @var mixed FALSE or (for test purposes) a callback to use in place of simplexml_load_file */
   public static $simplexml_load_file = 'simplexml_load_file';
@@ -21,12 +21,19 @@ class WebhookProcessor {
   protected $chain;
 
   /**
-   * Provided for Queue Task
+   * Provided for the Queue Task runner
    */
   public static function processQueueItem($queueTaskContext, $data) {
 
-    $result = static::processQueuedWebhook($data);
-    if (!$result) {
+    $exception = NULL;
+    try {
+      $isOK = static::processQueuedWebhook($data);
+    }
+    catch (\Exception $e) {
+      $exception = $e;
+      $isOK = FALSE;
+    }
+    if (!$isOK) {
       // Processing this one failed.
       // We'll add it to another queue called 'iparl-webhook-failed' so the
       // data is not lost completely, but note that this queue has no runner(!)
@@ -40,8 +47,13 @@ class WebhookProcessor {
         [$data], // arguments
         "" // title
       ));
+
+      if ($exception) {
+        // Re-throw excetion.
+        throw $exception;
+      }
     }
-    return $result;
+    return $isOK;
   }
   /**
    * Process the data form a webhook.
@@ -90,6 +102,23 @@ class WebhookProcessor {
     try {
       static::iparlLog("Processing queued webhook: " . json_encode($data));
       $start = microtime(TRUE);
+
+      // Before we start, let's make sure we have required info from iParl's API.
+      $is_petition = (!empty($data['actiontype']) && $data['actiontype'] === 'petition');
+      if (!empty($data['actionid'])) {
+        $lookup = static::getIparlObject($is_petition ? 'petition' : 'action');
+        if ($lookup === NULL) {
+          throw new ExternalAPIFailException(
+            "Failed to get API response for " . ($is_petition ? 'petition' : 'action' )
+            );
+        }
+        elseif (!isset($lookup[$data['actionid']])) {
+          throw new ExternalAPIFailException(
+            ($is_petition ? 'petition' : 'action' )
+            . " with actionid $data[actionid] not found in iParl API response"
+          );
+        }
+      }
       foreach ($this->chain as $callable) {
         $callable($data);
       }
@@ -109,6 +138,10 @@ class WebhookProcessor {
       $took = round(microtime(TRUE) - $start, 3);
       static::iparlLog("Processed hook_civicrm_iparl_webhook_post_process in {$took}s");
        */
+    }
+    catch (ExternalAPIFailException $e) {
+      // re-throw this to handle at a higher level.
+      throw $e;
     }
     catch (\Exception $e) {
       static::iparlLog("EXCEPTION: Failed processing: " . $e->getMessage() . "\n" . $e->getTraceAsString());
@@ -214,9 +247,9 @@ class WebhookProcessor {
     }
 
     // If we were unable to match on first and last name, try last name only.
-    if ($this->last_name) {
+    if ($input['last_name']) {
       foreach ($unique_contacts as $contactID => $row) {
-        if ($this->last_name == $row['contact.last_name']) {
+        if ($input['last_name'] == $row['contact.last_name']) {
           // Found a match on last name and email, use that.
           $input['contactID'] = $contactID;
           static::iparlLog("Found contact $contactID by email and last name match.");
@@ -338,7 +371,7 @@ class WebhookProcessor {
         $subject .= ": " . $lookup[$input['actionid']];
       }
       else {
-        throw new \Exception("Failed to lookup data for actionid " . json_encode($input['actionid']));
+        throw new \Exception("Failed to lookup data for actionid "  . json_encode(['needle' => $input['actionid'], 'haystack' => $lookup]));
       }
     }
 
@@ -388,7 +421,7 @@ class WebhookProcessor {
 
       $data = $bypass_cache ? NULL : $cache->get($cache_key, NULL);
       if ($data === NULL) {
-        static::iparlLog("Cache " . ($bypass_cache ? 'bypass' : 'miss') . " on looking up $cache_key");
+        static::iparlLog("Cache " . ($bypass_cache ? 'bypass' : 'miss') . " on looking up $cache_key, must fetch");
         // Fetch from iparl api.
         $iparl_username = Civi::settings()->get("iparl_user_name");
         if ($iparl_username) {
@@ -396,6 +429,7 @@ class WebhookProcessor {
           $function = static::$simplexml_load_file;
           $xml = $function($url , null , LIBXML_NOCDATA);
           $file = json_decode(json_encode($xml), TRUE);
+          static::iparlLog("Received for $cache_key from $url: " . json_encode($xml));
           if (is_array($file)) {
             // Successfully downloaded data.
             $data = [];
@@ -415,11 +449,17 @@ class WebhookProcessor {
                 $data[$item['id']] = $item['title'];
               }
             }
-            // Cache it (even an empty dataset) for 1 hour. Note that saving the
-            // iParl Settings form will force a refresh of this cache.
-            $cache->set($cache_key, $data, 60*60);
-            \Civi::$statics[$cache_key] = $data;
-            static::iparlLog("Caching " . count($data) . " results from $url for 1 hour.");
+            // Cache it for 1 hour, unless it's empty as this probably means
+            // something's up. Note that saving the iParl Settings form will
+            // force a refresh of this cache.
+            if ($data) {
+              $cache->set($cache_key, $data, 60*60);
+              \Civi::$statics[$cache_key] = $data;
+              static::iparlLog("Caching " . count($data) . " results from $url for 1 hour.");
+            }
+            else {
+              static::iparlLog("Not caching data $cache_key: none received? Has someone set them to private? They should be listed at $url");
+            }
           }
           else {
             static::iparlLog("Failed to load resource at: $url");
@@ -479,7 +519,9 @@ class WebhookProcessor {
     }
 
     $message = "From " . ($_SERVER['REMOTE_ADDR'] ?? '(unavailable)') . ": $message";
-    \CRM_Core_Error::debug_log_message($message, $out=FALSE, $component='iparl', $priority);
+    $out = FALSE;
+    $component = 'iparl';
+    \CRM_Core_Error::debug_log_message($message, $out, $component, $priority);
   }
   /**
    * Before 1.6.0 we fired hook_civicrm_iparl_webhook_post_process
