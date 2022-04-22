@@ -390,7 +390,7 @@ class WebhookProcessor {
       $params['activity_date_time'] = $input['date'];
     }
     $result = civicrm_api3('Activity', 'create', $params);
-    $data['activity'] = $result;
+    $input['activity'] = $result;
     static::iparlLog("Created iParl action activity $result[id]: $params[subject]");
   }
   /**
