@@ -46,6 +46,15 @@ use \Civi\Iparl\WebhookProcessor;
  */
 class CRM_Iparl_Page_IparlWebhook extends CRM_Core_Page {
 
+  /**
+   * Provided for backwards compatibility for webhook data queued before v 1.6
+   *
+   * Not used from 1.6 on.
+   */
+  public static function processQueueItem($queueTaskContext, $data) {
+    return WebhookProcessor::processQueueItem($queueTaskContext, $data);
+  }
+
   public function run() {
     try {
       /** @var array Holds data that we will allow onto the queue. By default, everything. */
