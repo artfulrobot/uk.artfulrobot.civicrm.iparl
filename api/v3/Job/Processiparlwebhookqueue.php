@@ -1,6 +1,9 @@
 <?php
 use CRM_Iparl_ExtensionUtil as E;
 
+use Civi\Iparl\WebhookProcessor;
+use Civi\Iparl\ExternalAPIFailException;
+
 /**
  * Job.Processiparlwebhookqueue API specification (optional)
  * This is used for documentation and validation.
@@ -23,16 +26,6 @@ function _civicrm_api3_job_Processiparlwebhookqueue_spec(&$spec) {
  * @throws API_Exception
  */
 function civicrm_api3_job_Processiparlwebhookqueue($params) {
-
-  // Ensure we have the latest definitions If we don't have the definitions
-  // there's no point running - it would create lots of iparl-webhooks-failed
-  // entries that are more of a pain to sort out.
-  $webhook = new CRM_Iparl_Page_IparlWebhook();
-  foreach (['action', 'petition'] as $type) {
-    if ($webhook->getIparlObject($type, TRUE) === NULL) {
-      return ['processed' => 0, 'is_error' => 1, 'error_message' => "Failed to load iParl resource: $type"];
-    }
-  }
 
   $queue = CRM_Queue_Service::singleton()->create([
     'type'  => 'Sql',
@@ -65,17 +58,24 @@ function civicrm_api3_job_Processiparlwebhookqueue($params) {
     if ($result['is_error']) {
       if ($result['exception'] !== NULL) {
         $msg = $result['exception']->getMessage();
-        if ($msg === 'Failed to claim next task') {
+        if ($result['exception'] instanceof ExternalAPIFailException) {
+          // We should stop processing as it's likely others will fail too.
+          WebhookProcessor::iparlLog("Aborting Job.Processiparlwebhookqueue after 1 fail because error likely to affect others in queue: " . $msg);
+          $errors++;
+          break;
+        }
+        elseif ($msg === 'Failed to claim next task') {
           // Queue empty, or another process busy.
           // This is not an error to us, but we need to stop processing.
           break;
         }
         else {
-          // Some other exception.
+          // Some other exception (should have been logged already). We will continue.
           $errors++;
         }
       }
       else {
+        // Some other error (should have been logged already). We will continue.
         $errors++;
       }
     }

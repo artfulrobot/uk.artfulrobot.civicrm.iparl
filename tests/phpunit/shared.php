@@ -4,6 +4,7 @@ use CRM_Iparl_ExtensionUtil as E;
 use Civi\Test\HeadlessInterface;
 use Civi\Test\HookInterface;
 use Civi\Test\TransactionalInterface;
+use Civi\Iparl\WebhookProcessor;
 
 /**
  * Test basic webhooks
@@ -25,22 +26,21 @@ trait IparlShared {
     Civi::settings()->set('iparl_user_name', 'superfoo');
   }
   /**
-   * For testing purposes.
+   * Mock the iParl XML API for the test context.
    *
    * @param int &$calls Counts times it was called.
    * @param mixed $fail. If given and not FALSE, this is the value that any
    * simplexml_load_file call will return. Useful for returning null or []
    */
   public function mockIparlTitleLookup(&$calls, $fail=FALSE) {
-    // Mock the iParl XML API.
     if ($fail !== FALSE) {
-      CRM_Iparl_Page_IparlWebhook::$simplexml_load_file = function($url, $a, $b) use (&$calls, $fail) {
+      WebhookProcessor::$simplexml_load_file = function($url, $a, $b) use (&$calls, $fail) {
         $calls++;
         return $fail;
       };
     }
     else {
-      CRM_Iparl_Page_IparlWebhook::$simplexml_load_file = function($url, $a, $b) use(&$calls) {
+      WebhookProcessor::$simplexml_load_file = function($url, $a, $b) use(&$calls) {
         $calls++;
         switch ($url) {
         case "https://iparlsetup.com/api/superfoo/petitions":
@@ -63,32 +63,46 @@ trait IparlShared {
       };
     }
   }
+  /**
+   * Given an array of expected strings/regexes and a same-size array of actuals, check they all match.
+   *
+   * Regex patterns are identified by / at start
+   */
   public function assertArrayRegex($expected, $actual) {
-    $errors = [];
-    $this->assertInternalType('array', $actual);
+    $diff = [];
+    $errors = 0;
+    $this->assertIsArray($actual);
     foreach ($expected as $i => $pattern) {
       if (!isset($actual[$i])) {
-        $errors[] = "- $i => $pattern\n";
-        $errors[] = "+ $i => (MISSING)\n";
+        $diff[] = "- $i => $pattern\n";
+        $diff[] = "+ $i => (MISSING)\n";
       }
       elseif (substr($pattern, 0, 1) === '/') {
         // regex match.
         if (!preg_match($pattern, $actual[$i])) {
-          $errors[] = "- $i => $pattern\n";
-          $errors[] = "+ $i => {$actual[$i]}\n";
+          $diff[] = "- $i => $pattern\n";
+          $diff[] = "+ $i => {$actual[$i]}\n";
+          $errors++;
+        }
+        else {
+          $diff[] = "✔ $i => {$actual[$i]}\n";
         }
       }
       else {
         // String match.
         if ($pattern !== $actual[$i]) {
-          $errors[] = "- $i => $pattern\n";
-          $errors[] = "+ $i => {$actual[$i]}\n";
+          $diff[] = "- $i => $pattern\n";
+          $diff[] = "+ $i => {$actual[$i]}\n";
+          $errors++;
+        }
+        else {
+          $diff[] = "✔ $i => {$actual[$i]}\n";
         }
       }
     }
-    $errors = implode('', $errors);
+    $diff = implode('', $diff);
     if ($errors) {
-      $this->fail("Not matching expectations:\n" . $errors);
+      $this->fail("$errors lines not matching expectations:\n" . $diff);
     }
   }
 

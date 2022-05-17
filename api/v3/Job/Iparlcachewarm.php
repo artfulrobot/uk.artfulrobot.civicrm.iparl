@@ -23,9 +23,8 @@ function _civicrm_api3_job_Iparlcachewarm_spec(&$spec) {
  */
 function civicrm_api3_job_Iparlcachewarm($params) {
 
-  $webhook = new CRM_Iparl_Page_IparlWebhook();
   foreach (['action', 'petition'] as $type) {
-    $webhook->getIparlObject($type, TRUE);
+    \Civi\Iparl\WebhookProcessor::getIparlObject($type, TRUE);
   }
   return civicrm_api3_create_success([], $params, 'Job', 'Iparlcachewarm');
 }
